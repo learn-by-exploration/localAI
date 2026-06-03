@@ -1,0 +1,153 @@
+models:
+  # ── Coding models ──────────────────────────────────────────────────────────
+  - id: qwen-coder-fast
+    name: Qwen2.5 Coder 7B (Fast)
+    runner: ollama
+    model: qwen2.5-coder:7b
+    role: coding
+    priority: fast
+    context_length: 32768
+    vram_required_mb: 5000
+    enabled: false  # not pulled yet
+    tags: [coding, fast]
+
+  - id: qwen-coder-strong
+    name: Qwen2.5 Coder 32B (Quality)
+    runner: ollama
+    model: qwen2.5-coder:32b
+    role: coding
+    priority: quality
+    context_length: 32768
+    vram_required_mb: 20000
+    enabled: false  # needs >16GB VRAM
+    tags: [coding, quality]
+
+  # ── Chat models ────────────────────────────────────────────────────────────
+  - id: gemma-chat
+    name: Gemma 2 9B (Chat)
+    runner: ollama
+    model: gemma2:9b
+    role: chat
+    priority: balanced
+    context_length: 8192
+    vram_required_mb: 6000
+    enabled: false  # not pulled yet
+    tags: [chat, balanced]
+
+  - id: qwen-small
+    name: Qwen2.5 1.5B (Tiny/Fast)
+    runner: ollama
+    model: qwen2.5:1.5b
+    role: chat
+    priority: fast
+    context_length: 32768
+    vram_required_mb: 1500
+    tags: [chat, fast, tiny]
+
+  # ── Agent / tool-use models ────────────────────────────────────────────────
+  - id: qwen-agent
+    name: Qwen2.5 7B (Agent)
+    runner: ollama
+    model: qwen2.5:7b
+    role: agent
+    priority: balanced
+    context_length: 32768
+    vram_required_mb: 5000
+    enabled: false  # not pulled yet
+    tags: [agent, tools]
+
+  # ── Long-context models ────────────────────────────────────────────────────
+  - id: qwen-long
+    name: Qwen2.5 14B (Long Context)
+    runner: ollama
+    model: qwen2.5:14b
+    role: long_context
+    priority: quality
+    context_length: 128000
+    vram_required_mb: 9000
+    enabled: false  # not pulled yet
+    tags: [long_context]
+
+  # ── llama.cpp examples (GGUF) ──────────────────────────────────────────────
+  - id: gemma-gguf
+    name: Gemma 2 9B GGUF
+    runner: llamacpp
+    model: gemma-2-9b
+    model_path: ./models/gemma-2-9b-it-Q4_K_M.gguf
+    role: chat
+    priority: balanced
+    context_length: 8192
+    vram_required_mb: 5500
+    port: 8081
+    enabled: false
+    tags: [chat, gguf]
+
+  # ── vLLM examples (full precision / AWQ) ──────────────────────────────────
+  - id: qwen-vllm
+    name: Qwen2.5 Coder 7B (vLLM)
+    runner: vllm
+    model: Qwen/Qwen2.5-Coder-7B-Instruct
+    role: coding
+    priority: quality
+    context_length: 32768
+    vram_required_mb: 14000
+    port: 8082
+    enabled: false
+    tags: [coding, vllm]
+
+  # ── SGLang examples ────────────────────────────────────────────────────────
+  - id: qwen-sglang
+    name: Qwen2.5 7B (SGLang)
+    runner: sglang
+    model: Qwen/Qwen2.5-7B-Instruct
+    role: chat
+    priority: quality
+    context_length: 32768
+    vram_required_mb: 14000
+    port: 8083
+    enabled: false
+    tags: [chat, sglang]
+
+default_model: qwen-small
+
+fallback_chains:
+  - name: coding
+    models:
+      - qwen-coder-strong
+      - qwen-coder-fast
+      - qwen-agent
+      - qwen-small
+
+  - name: chat
+    models:
+      - gemma-chat
+      - qwen-coder-fast
+      - qwen-small
+
+  - name: agent
+    models:
+      - qwen-agent
+      - qwen-coder-fast
+      - gemma-chat
+
+  - name: long_context
+    models:
+      - qwen-long
+      - qwen-coder-fast
+
+# Map cloud model names → local models for drop-in compatibility
+aliases:
+  - alias: claude-sonnet
+    model_id: qwen-small
+  - alias: claude-haiku
+    model_id: qwen-small
+  - alias: claude-opus
+    model_id: qwen-small
+  - alias: gpt-4
+    model_id: qwen-small
+  - alias: gpt-4o
+    model_id: qwen-small
+  - alias: gpt-3.5-turbo
+    model_id: qwen-small
+  - alias: active
+    model_id: qwen-small

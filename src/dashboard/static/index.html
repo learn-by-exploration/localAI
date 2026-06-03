@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local AI Gateway</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span class="logo-icon">⚡</span>
+      <span class="logo-text">Local AI Gateway</span>
+    </div>
+    <div class="header-right">
+      <div id="gateway-status" class="status-pill status-loading">connecting…</div>
+      <span class="endpoint-badge">:8080</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Active model panel -->
+    <section class="panel panel-active">
+      <div class="panel-title">Active Model</div>
+      <div id="active-model" class="active-model-card">
+        <div class="am-name">—</div>
+        <div class="am-meta">
+          <span id="am-runner" class="badge">—</span>
+          <span id="am-role" class="badge badge-role">—</span>
+          <span id="am-priority" class="badge badge-priority">—</span>
+        </div>
+        <div class="am-stats">
+          <div class="stat">
+            <span class="stat-label">Tokens/sec</span>
+            <span id="stat-tps" class="stat-value">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Latency (1st)</span>
+            <span id="stat-latency" class="stat-value">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Idle</span>
+            <span id="stat-idle" class="stat-value">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Context</span>
+            <span id="stat-ctx" class="stat-value">—</span>
+          </div>
+        </div>
+        <div class="am-actions">
+          <button id="btn-stop" class="btn btn-danger" onclick="stopModel()">Stop</button>
+          <button id="btn-profile" class="btn btn-secondary" onclick="profileModel()">Benchmark</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- System metrics -->
+    <section class="panel panel-metrics">
+      <div class="panel-title">System</div>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">VRAM</div>
+          <div class="metric-bar-wrap">
+            <div id="bar-vram" class="metric-bar" style="width:0%"></div>
+          </div>
+          <div id="metric-vram" class="metric-value">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">RAM</div>
+          <div class="metric-bar-wrap">
+            <div id="bar-ram" class="metric-bar" style="width:0%"></div>
+          </div>
+          <div id="metric-ram" class="metric-value">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">CPU</div>
+          <div class="metric-bar-wrap">
+            <div id="bar-cpu" class="metric-bar" style="width:0%"></div>
+          </div>
+          <div id="metric-cpu" class="metric-value">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">GPU Temp</div>
+          <div id="metric-gpu-temp" class="metric-value big">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Requests</div>
+          <div id="metric-requests" class="metric-value big">0 active</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Processed</div>
+          <div id="metric-processed" class="metric-value big">0</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Model list -->
+    <section class="panel panel-models">
+      <div class="panel-title">
+        Models
+        <button class="btn btn-xs btn-secondary" onclick="refreshModels()">↻ Refresh</button>
+      </div>
+      <div id="model-list" class="model-list">
+        <div class="loading-text">Loading…</div>
+      </div>
+    </section>
+
+    <!-- API snippets -->
+    <section class="panel panel-snippets">
+      <div class="panel-title">Quick Connect</div>
+      <div class="snippet-tabs">
+        <button class="snip-tab active" onclick="showSnippet('curl')">curl</button>
+        <button class="snip-tab" onclick="showSnippet('python')">Python</button>
+        <button class="snip-tab" onclick="showSnippet('openwebui')">Open WebUI</button>
+        <button class="snip-tab" onclick="showSnippet('continue')">Continue</button>
+      </div>
+      <div class="snippet-wrap">
+        <button class="copy-btn" onclick="copySnippet()">Copy</button>
+        <pre id="snippet-code" class="snippet"></pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
