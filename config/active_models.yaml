@@ -1,4 +1,18 @@
 models:
+  # ── Qwen3 (latest, 2025) ───────────────────────────────────────────────────
+  - id: qwen3-8b
+    name: Qwen3 8B (Coding + Thinking)
+    runner: ollama
+    model: qwen3:8b
+    role: coding
+    priority: quality
+    context_length: 32768
+    vram_required_mb: 5500
+    enabled: true
+    tags: [coding, chat, thinking, qwen3]
+    extra:
+      min_tokens: 2048  # Qwen3 uses ~1000-1500 tokens for thinking before answering
+
   # ── Coding models ──────────────────────────────────────────────────────────
   - id: qwen-coder-fast
     name: Qwen2.5 Coder 7B (Fast)
@@ -119,47 +133,49 @@ models:
     enabled: true
     tags: [chat, reasoning]
 
-default_model: gemma4-chat
+default_model: qwen3-8b
 
 fallback_chains:
   - name: coding
     models:
-      - qwen-coder-strong
-      - qwen-coder-fast
-      - qwen-agent
+      - qwen3-8b
+      - qwen-coder-strong   # disabled until pulled
+      - qwen-coder-fast     # disabled until pulled
+      - gemma4-chat
       - qwen-small
 
   - name: chat
     models:
       - gemma4-chat
-      - gemma-chat
-      - qwen-coder-fast
+      - qwen3-8b
       - qwen-small
 
   - name: agent
     models:
-      - qwen-agent
-      - qwen-coder-fast
-      - gemma-chat
+      - qwen3-8b
+      - gemma4-chat
+      - qwen-small
 
   - name: long_context
     models:
-      - qwen-long
-      - qwen-coder-fast
+      - gemma4-chat         # 128k context
+      - qwen3-8b
+      - qwen-small
 
 # Map cloud model names → local models for drop-in compatibility
+# Update these whenever you pull a new/better model
 aliases:
   - alias: claude-sonnet
-    model_id: qwen-small
+    model_id: qwen3-8b          # best coding quality
   - alias: claude-haiku
-    model_id: qwen-small
+    model_id: qwen-small        # fastest
   - alias: claude-opus
-    model_id: qwen-small
+    model_id: qwen3-8b          # best quality
   - alias: gpt-4
-    model_id: qwen-small
+    model_id: qwen3-8b
   - alias: gpt-4o
-    model_id: qwen-small
+    model_id: qwen3-8b
   - alias: gpt-3.5-turbo
     model_id: qwen-small
   - alias: active
-    model_id: qwen-small
+    model_id: qwen3-8b          # default: best model currently loaded

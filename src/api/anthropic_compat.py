@@ -35,13 +35,19 @@ def _to_unified(req: AnthropicRequest) -> UnifiedRequest:
             role = MessageRole.user
         messages.append(UnifiedMessage(role=role, content=text))
 
+    # Pass the Anthropic model name to the registry for alias resolution
+    # (e.g. "claude-haiku" → "qwen-small" via models.yaml aliases).
+    # "auto" is the only sentinel that triggers pure task-type routing.
+    model_id = req.model if req.model and req.model != "auto" else None
+
     return UnifiedRequest(
         messages=messages,
-        system=req.system,
+        system=req.system_text(),
         temperature=req.temperature if req.temperature is not None else 0.7,
         max_tokens=req.max_tokens,
         top_p=req.top_p,
         stream=req.stream or False,
+        model_id=model_id,
     )
 
 

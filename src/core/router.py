@@ -60,6 +60,9 @@ class SmartRouter:
             model = self._registry.get_model(request.model_id)
             if model:
                 return model
+            # Explicit model requested but not found — do NOT silently fall back.
+            # Returning None here lets the API layer raise a 404 with helpful context.
+            return None
 
         task_type = self.detect_task_type(request)
         role = _TASK_TO_ROLE.get(task_type, ModelRole.chat)

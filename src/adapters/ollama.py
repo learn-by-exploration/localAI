@@ -234,13 +234,21 @@ class OllamaAdapter(BaseAdapter):
             logger.error(f"Pull failed: {e}")
             return False
 
-    @staticmethod
-    def _build_options(request: UnifiedRequest) -> dict:
+    def _build_options(self, request: UnifiedRequest) -> dict:
         opts: dict = {}
         if request.temperature is not None:
             opts["temperature"] = request.temperature
-        if request.max_tokens:
-            opts["num_predict"] = request.max_tokens
         if request.top_p is not None:
             opts["top_p"] = request.top_p
+
+        # Per-model minimum token budget (important for Qwen3 thinking phase).
+        # Models that use chain-of-thought (thinking tokens) need room for
+        # both the internal reasoning AND the final answer.
+        min_tokens: int = self._config.get("min_tokens", 0)
+        if request.max_tokens:
+            opts["num_predict"] = max(request.max_tokens, min_tokens)
+        elif min_tokens:
+            opts["num_predict"] = min_tokens
+        # If neither is set, Ollama uses its own default — do not restrict.
+
         return opts

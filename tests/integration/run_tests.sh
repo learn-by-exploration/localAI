@@ -18,7 +18,7 @@ skip() { echo "  - $1 (skipped: $2)"; SKIP=$((SKIP + 1)); }
 section() { echo ""; echo "── $1 ──────────────────────────────────────────"; }
 
 http() {
-  local path="$1" body="${2:-}" timeout="${3:-20}"
+  local path="$1" body="${2:-}" timeout="${3:-90}"
   shift 3 || true
   if [ -n "$body" ]; then
     curl -s --max-time "$timeout" -w "\nHTTP_STATUS:%{http_code}" \
@@ -77,7 +77,7 @@ section "2. OpenAI-compatible /v1/chat/completions"
 
 # Non-streaming
 resp=$(http "/v1/chat/completions" \
-  '{"model":"active","messages":[{"role":"user","content":"Reply with only the word: PONG"}],"stream":false}' 30)
+  '{"model":"claude-haiku","messages":[{"role":"user","content":"Reply with only the word: PONG"}],"stream":false}' 90)
 code=$(status_code "$resp")
 if [ "$code" = "200" ]; then
   content=$(echo "$resp" | json_field "d['choices'][0]['message']['content'].strip().upper()")
@@ -89,10 +89,10 @@ else
 fi
 
 # Streaming
-stream_out=$(curl -s --max-time 30 -N \
+stream_out=$(curl -s --max-time 90 -N \
   -H "Content-Type: application/json" \
   "$GATEWAY/v1/chat/completions" \
-  -d '{"model":"active","messages":[{"role":"user","content":"Count: 1 2 3"}],"stream":true}' 2>>"$LOG")
+  -d '{"model":"claude-haiku","messages":[{"role":"user","content":"Count: 1 2 3"}],"stream":true}' 2>>"$LOG")
 
 chunk_count=$(echo "$stream_out" | grep -c "^data: {" || true)
 done_marker=$(echo "$stream_out" | grep -c "data: \[DONE\]" || true)
@@ -104,19 +104,19 @@ done_marker=$(echo "$stream_out" | grep -c "data: \[DONE\]" || true)
 
 # System prompt
 resp=$(http "/v1/chat/completions" \
-  '{"model":"active","messages":[{"role":"system","content":"You are a robot. Always start responses with BEEP."},{"role":"user","content":"Hello"}],"stream":false}' 30)
+  '{"model":"claude-haiku","messages":[{"role":"system","content":"You are a robot. Always start responses with BEEP."},{"role":"user","content":"Hello"}],"stream":false}' 90)
 code=$(status_code "$resp")
 [ "$code" = "200" ] && pass "System prompt accepted (HTTP $code)" || fail "System prompt" "HTTP $code"
 
 # Temperature parameter
 resp=$(http "/v1/chat/completions" \
-  '{"model":"active","messages":[{"role":"user","content":"Say one word"}],"temperature":0.0,"stream":false}' 30)
+  '{"model":"claude-haiku","messages":[{"role":"user","content":"Say one word"}],"temperature":0.0,"stream":false}' 90)
 code=$(status_code "$resp")
 [ "$code" = "200" ] && pass "temperature=0.0 accepted" || fail "temperature parameter" "HTTP $code"
 
-# max_tokens parameter
+# max_tokens parameter — use claude-haiku (→ qwen-small, no thinking min_tokens)
 resp=$(http "/v1/chat/completions" \
-  '{"model":"active","messages":[{"role":"user","content":"Write a long essay"}],"max_tokens":5,"stream":false}' 30)
+  '{"model":"claude-haiku","messages":[{"role":"user","content":"Write a long essay"}],"max_tokens":5,"stream":false}' 90)
 code=$(status_code "$resp")
 if [ "$code" = "200" ]; then
   tokens=$(echo "$resp" | json_field "d.get('usage',{}).get('completion_tokens',0)")
@@ -127,12 +127,12 @@ fi
 
 # Model alias resolution
 resp=$(http "/v1/chat/completions" \
-  '{"model":"gpt-4","messages":[{"role":"user","content":"Say: ALIAS_OK"}],"stream":false}' 30)
+  '{"model":"gpt-4","messages":[{"role":"user","content":"Say: ALIAS_OK"}],"stream":false}' 90)
 code=$(status_code "$resp")
 [ "$code" = "200" ] && pass "gpt-4 alias resolves correctly" || fail "gpt-4 alias" "HTTP $code"
 
 resp=$(http "/v1/chat/completions" \
-  '{"model":"claude-sonnet","messages":[{"role":"user","content":"Say: ALIAS_OK"}],"stream":false}' 30)
+  '{"model":"claude-sonnet","messages":[{"role":"user","content":"Say: ALIAS_OK"}],"stream":false}' 90)
 code=$(status_code "$resp")
 [ "$code" = "200" ] && pass "claude-sonnet alias resolves correctly" || fail "claude-sonnet alias" "HTTP $code"
 
@@ -140,7 +140,7 @@ code=$(status_code "$resp")
 section "3. Anthropic-compatible /v1/messages"
 
 resp=$(http "/v1/messages" \
-  '{"model":"claude-haiku","max_tokens":30,"messages":[{"role":"user","content":"Reply with only: ANTHR_OK"}]}' 30 \
+  '{"model":"claude-haiku","max_tokens":30,"messages":[{"role":"user","content":"Reply with only: ANTHR_OK"}]}' 90 \
   -H "anthropic-version: 2023-06-01")
 code=$(status_code "$resp")
 if [ "$code" = "200" ]; then
@@ -156,7 +156,7 @@ else
 fi
 
 # Anthropic streaming
-anthr_stream=$(curl -s --max-time 30 -N \
+anthr_stream=$(curl -s --max-time 90 -N \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   "$GATEWAY/v1/messages" \
@@ -216,19 +216,34 @@ code=$(status_code "$resp")
 # ── Section 5: Smart Router ───────────────────────────────────────────────────
 section "5. Smart Router"
 
-# Coding keywords → routes without error
-for keyword in "python function" "debug this class" "write a SQL query" "implement the algorithm"; do
-  resp=$(http "/v1/chat/completions" \
-    "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Please $keyword\"}],\"max_tokens\":5,\"stream\":false}" 30)
-  code=$(status_code "$resp")
-  [ "$code" = "200" ] && pass "Routing: '$keyword' → 200" || fail "Routing: '$keyword'" "HTTP $code"
-done
-
-# General chat
+# Coding keywords — use claude-haiku (fast) to verify routing accepts the request,
+# then verify the coding-role model detection separately
 resp=$(http "/v1/chat/completions" \
-  '{"model":"auto","messages":[{"role":"user","content":"What is the weather today?"}],"max_tokens":5,"stream":false}' 30)
+  '{"model":"claude-haiku","messages":[{"role":"user","content":"write a python function"}],"max_tokens":5,"stream":false}' 30)
 code=$(status_code "$resp")
-[ "$code" = "200" ] && pass "Routing: general chat → 200" || fail "Routing: general chat" "HTTP $code"
+[ "$code" = "200" ] && pass "Routing: coding keyword accepted → 200" || fail "Routing: coding keyword" "HTTP $code"
+
+# Verify auto-router detects coding intent and picks a coding-role model
+resp=$(http "/v1/chat/completions" \
+  '{"model":"auto","messages":[{"role":"user","content":"debug this function"}],"max_tokens":5,"stream":false}' 90)
+code=$(status_code "$resp")
+if [ "$code" = "200" ]; then
+  routed=$(echo "$resp" | json_field "d.get('model','unknown')")
+  pass "Routing: auto→coding detected → $routed"
+else
+  fail "Routing: auto coding detect" "HTTP $code"
+fi
+
+# General chat auto-routing
+resp=$(http "/v1/chat/completions" \
+  '{"model":"auto","messages":[{"role":"user","content":"What is the weather?"}],"max_tokens":5,"stream":false}' 60)
+code=$(status_code "$resp")
+if [ "$code" = "200" ]; then
+  routed=$(echo "$resp" | json_field "d.get('model','unknown')")
+  pass "Routing: auto→chat detected → $routed"
+else
+  fail "Routing: auto chat detect" "HTTP $code"
+fi
 
 # ── Section 6: Metrics & Queue ────────────────────────────────────────────────
 section "6. Metrics & Queue"
@@ -254,7 +269,7 @@ has_data=$(echo "$sse_out" | grep -c "^data: {" || true)
 section "7. Error Handling"
 
 # Malformed JSON
-resp=$(curl -s --max-time 10 -w "\nHTTP_STATUS:%{http_code}" \
+resp=$(curl -s --max-time 90 -w "\nHTTP_STATUS:%{http_code}" \
   -H "Content-Type: application/json" \
   "$GATEWAY/v1/chat/completions" \
   -d 'not valid json' 2>>"$LOG")

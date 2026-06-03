@@ -26,15 +26,29 @@ class AnthropicTool(BaseModel):
     input_schema: dict[str, Any] = {}
 
 
+class AnthropicSystemBlock(BaseModel):
+    type: str = "text"
+    text: str = ""
+    cache_control: dict | None = None
+
+
 class AnthropicRequest(BaseModel):
     model: str
     messages: list[AnthropicMessage]
-    system: str | None = None
+    # Claude Code sends system as a list of content blocks; plain clients send a string
+    system: Union[str, list[AnthropicSystemBlock], None] = None
     max_tokens: int = 4096
     temperature: float | None = None
     top_p: float | None = None
     stream: bool | None = False
     tools: list[AnthropicTool] | None = None
+
+    def system_text(self) -> str | None:
+        if self.system is None:
+            return None
+        if isinstance(self.system, str):
+            return self.system
+        return " ".join(b.text for b in self.system if b.text)
 
 
 class AnthropicResponseContent(BaseModel):

@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["OpenAI Compatible"])
 
-# Model names that should NOT be used as registry lookups
-_CLOUD_MODEL_ALIASES = {
-    "gpt-4", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo",
-    "active", "auto",
-}
+# Only strip model_id for this sentinel — anything else (including cloud-style
+# names like gpt-4, claude-sonnet) is forwarded to the registry where it may
+# resolve as a local alias. If it doesn't resolve, _ensure_model returns a
+# helpful 404 listing what IS available.
+_AUTO_SENTINELS = {"auto"}
 
 
 def _to_unified(req: OAIChatRequest) -> UnifiedRequest:
@@ -53,8 +53,8 @@ def _to_unified(req: OAIChatRequest) -> UnifiedRequest:
             role = MessageRole.user
         messages.append(UnifiedMessage(role=role, content=text))
 
-    # Pass model_id only if it's a real registry ID (not a cloud name)
-    model_id = req.model if req.model not in _CLOUD_MODEL_ALIASES else None
+    # Strip only the "auto" sentinel; all other names go to the registry.
+    model_id = req.model if req.model not in _AUTO_SENTINELS else None
 
     return UnifiedRequest(
         messages=messages,
@@ -74,7 +74,17 @@ async def _ensure_model(
 ) -> None:
     model = smart_router.select_model(unified_req)
     if not model:
-        raise HTTPException(status_code=503, detail="No model available in registry")
+        available = [m.id for m in smart_router._registry.get_all_models()]
+        if unified_req.model_id:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Model '{unified_req.model_id}' not found or not enabled. "
+                    f"Available models: {available}. "
+                    "Check config/models.yaml or pull the model with: ollama pull <name>"
+                ),
+            )
+        raise HTTPException(status_code=503, detail=f"No model available. Pull one with: ollama pull qwen2.5:1.5b — available slots: {available}")
 
     if lifecycle._loaded_model_id == model.id:
         return
@@ -88,7 +98,14 @@ async def _ensure_model(
         if success:
             return
 
-    raise HTTPException(status_code=503, detail="Failed to load any model")
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Failed to load '{model.id}' and all fallbacks. "
+            f"Last error: {lifecycle._load_error or 'unknown'}. "
+            "Is Ollama running? Try: ollama serve"
+        ),
+    )
 
 
 @router.get("/v1/models")
