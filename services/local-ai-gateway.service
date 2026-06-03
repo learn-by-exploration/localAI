@@ -1,0 +1,15 @@
+[Unit]
+Description=Local AI Gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/common_games/local-ai-gateway
+EnvironmentFile=-%h/.config/local-ai-gateway/gateway.env
+ExecStart=%h/.local/bin/uvicorn src.main:app --host ${GATEWAY_HOST} --port ${GATEWAY_PORT}
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

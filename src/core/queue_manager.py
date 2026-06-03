@@ -85,3 +85,11 @@ class RequestQueue:
             "total_errors": self._total_errors,
             "last_request_at": self._last_request_time,
         }
+
+    async def wait_until_idle(self, timeout_s: float = 10.0) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while self._active_count > 0:
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.1)
+        return True

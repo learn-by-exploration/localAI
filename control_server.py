@@ -34,9 +34,10 @@ def _check_auth(x_gateway_secret: str | None) -> None:
     if x_gateway_secret != _SECRET:
         raise HTTPException(status_code=401, detail="Invalid or missing X-Gateway-Secret header")
 
-GATEWAY_URL = "http://localhost:8080"
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8080")
 GATEWAY_LOG = "/tmp/gateway.log"
 BASE_DIR = Path(__file__).parent
+GATEWAY_SERVICE = "local-ai-gateway.service"
 
 
 def _gateway_running() -> bool:
@@ -76,6 +77,35 @@ def _systemctl_ollama(action: str) -> tuple[bool, str]:
         check=False,
     )
     return result.returncode == 0, result.stderr.strip()
+
+
+def _user_service_exists(service: str) -> bool:
+    result = subprocess.run(
+        ["systemctl", "--user", "status", service],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode in (0, 3)
+
+
+def _systemctl_user(service: str, action: str) -> tuple[bool, str]:
+    result = subprocess.run(
+        ["systemctl", "--user", "--no-ask-password", action, service],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _service_active(service: str, user: bool = False) -> bool:
+    cmd = ["systemctl"]
+    if user:
+        cmd.append("--user")
+    cmd.extend(["is-active", "--quiet", service])
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
 
 
 def _ollama_pids() -> list[int]:
@@ -179,10 +209,69 @@ def _get_status_sync() -> dict:
     }
 
 
+def _docker_bridge_reachable() -> bool:
+    return os.getenv("CONTROL_HOST", "") in {"172.17.0.1", "host.docker.internal"} or "172.17.0.1" in _local_ipv4_addresses()
+
+
+def _local_ipv4_addresses() -> list[str]:
+    try:
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, check=False)
+    except Exception:
+        return []
+    return [part for part in result.stdout.split() if part.count(".") == 3]
+
+
+def _diagnostics_sync() -> dict:
+    status = _get_status_sync()
+    gateway_service_exists = _user_service_exists(GATEWAY_SERVICE)
+    ollama_service_exists = _system_ollama_service_exists()
+    recommendations: list[str] = []
+
+    if not status["gateway"] and not gateway_service_exists:
+        recommendations.append("Install local-ai-gateway.service with ./install.sh for cleaner start/stop.")
+    if not status["ollama"] and ollama_service_exists:
+        recommendations.append("Run systemctl --no-ask-password start ollama.service or install the polkit rule if permission fails.")
+    if not _docker_bridge_reachable():
+        recommendations.append("For Docker Open WebUI, bind control/gateway to 172.17.0.1 and use host.docker.internal.")
+    if not _SECRET:
+        recommendations.append("Set GATEWAY_SECRET in ~/.config/local-ai-gateway/gateway.env and Open WebUI valves.")
+
+    return {
+        **status,
+        "gateway_url": GATEWAY_URL,
+        "gateway_service": {
+            "name": GATEWAY_SERVICE,
+            "installed": gateway_service_exists,
+            "active": _service_active(GATEWAY_SERVICE, user=True),
+        },
+        "control": {
+            "secret_enabled": bool(_SECRET),
+            "local_ipv4": _local_ipv4_addresses(),
+        },
+        "ollama_service": {
+            "name": "ollama.service",
+            "installed": ollama_service_exists,
+            "active": _service_active("ollama.service"),
+            "pids": _ollama_pids(),
+        },
+        "docker": {
+            "bridge_hint": "172.17.0.1",
+            "host_alias": "host.docker.internal",
+        },
+        "recommendations": recommendations,
+    }
+
+
 @app.get("/status")
 def status(x_gateway_secret: str | None = Header(default=None)):
     _check_auth(x_gateway_secret)
     return _get_status_sync()
+
+
+@app.get("/diagnostics")
+def diagnostics(x_gateway_secret: str | None = Header(default=None)):
+    _check_auth(x_gateway_secret)
+    return _diagnostics_sync()
 
 
 @app.post("/start")
@@ -193,7 +282,9 @@ async def start(x_gateway_secret: str | None = Header(default=None)):
     # Start Ollama
     if not _ollama_running():
         if _system_ollama_service_exists():
-            _systemctl_ollama("start")
+            started, error = _systemctl_ollama("start")
+            if not started:
+                logger.warning(f"Could not start ollama.service without admin permission: {error}")
         else:
             subprocess.Popen(
                 ["ollama", "serve"],
@@ -212,17 +303,22 @@ async def start(x_gateway_secret: str | None = Header(default=None)):
 
     # Start gateway — open log file in a with-block to avoid fd leak
     if not _gateway_running():
-        uvicorn = os.path.expanduser("~/.local/bin/uvicorn")
-        if not os.path.exists(uvicorn):
-            uvicorn = "uvicorn"
+        if _user_service_exists(GATEWAY_SERVICE):
+            started, error = _systemctl_user(GATEWAY_SERVICE, "start")
+            if not started:
+                logger.warning(f"Could not start {GATEWAY_SERVICE}: {error}")
+        else:
+            uvicorn = os.path.expanduser("~/.local/bin/uvicorn")
+            if not os.path.exists(uvicorn):
+                uvicorn = "uvicorn"
 
-        with open(GATEWAY_LOG, "w") as log_f:
-            subprocess.Popen(
-                [uvicorn, "src.main:app", "--host", "0.0.0.0", "--port", "8080"],
-                cwd=str(BASE_DIR),
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
-            )
+            with open(GATEWAY_LOG, "w") as log_f:
+                subprocess.Popen(
+                    [uvicorn, "src.main:app", "--host", "0.0.0.0", "--port", "8080"],
+                    cwd=str(BASE_DIR),
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                )
         for _ in range(30):
             await asyncio.sleep(2)
             if _gateway_running():
@@ -250,10 +346,14 @@ async def stop(x_gateway_secret: str | None = Header(default=None)):
         except Exception:
             pass
 
-        # Kill gateway
-        result = subprocess.run(["fuser", "-k", "8080/tcp"], capture_output=True)
-        steps.append("gateway stopped")
+        if _user_service_exists(GATEWAY_SERVICE):
+            stopped, error = _systemctl_user(GATEWAY_SERVICE, "stop")
+            if not stopped:
+                logger.warning(f"Could not stop {GATEWAY_SERVICE}: {error}")
+        else:
+            subprocess.run(["fuser", "-k", "8080/tcp"], capture_output=True, check=False)
         await asyncio.sleep(1)
+        steps.append("gateway stopped" if not _gateway_running() else "gateway stop failed; still running")
     else:
         steps.append("gateway was not running")
 

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.api.anthropic_compat import router as anthropic_router
+from src.api.diagnostics_api import router as diagnostics_router
 from src.api.metrics_api import router as metrics_router
 from src.api.models_api import router as models_router
 from src.api.openai_compat import router as openai_router
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(metrics_router)
     app.include_router(profile_router)
+    app.include_router(diagnostics_router)
 
     # Serve the dashboard at /
     dashboard_path = Path(__file__).parent / "dashboard" / "static"

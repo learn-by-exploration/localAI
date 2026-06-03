@@ -79,9 +79,13 @@ async def start_model(
 
 
 @router.post("/models/stop")
-async def stop_model(lifecycle: ModelLifecycle = Depends(get_lifecycle)):
+async def stop_model(
+    lifecycle: ModelLifecycle = Depends(get_lifecycle),
+    queue: RequestQueue = Depends(get_queue),
+):
+    idle = await queue.wait_until_idle(timeout_s=10.0)
     await lifecycle.unload_current()
-    return {"status": "stopped"}
+    return {"status": "stopped", "graceful": idle}
 
 
 @router.post("/models/switch")

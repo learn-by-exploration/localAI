@@ -28,8 +28,23 @@ cd local-ai-gateway
 # Pull at least one model
 ollama pull qwen2.5:1.5b
 
-# Install and start
+# Install package deps
 pip install -e .
+
+# Install user services, generate GATEWAY_SECRET, and start the control server
+./install.sh
+
+# Check Open WebUI/control/gateway/Ollama wiring
+./doctor.sh
+
+# Start the gateway and Ollama
+curl -X POST http://172.17.0.1:8089/start \
+  -H "X-Gateway-Secret: $(grep '^GATEWAY_SECRET=' ~/.config/local-ai-gateway/gateway.env | cut -d= -f2-)"
+```
+
+Manual run is also supported:
+
+```bash
 uvicorn src.main:app --host 0.0.0.0 --port 8080
 
 # Or use the convenience script
@@ -131,8 +146,12 @@ The file `openwebui_function.py` is an Open WebUI function that lets you control
 | `start` | Starts Ollama if needed, starts the gateway, and auto-loads the default model |
 | `stop` | Unloads the current model, stops the gateway, and stops Ollama when permitted |
 | `status` | Shows Ollama, gateway, active model, VRAM, RAM, CPU, and GPU temperature |
+| `diagnostics` | Shows service, Docker, secret, and permission checks |
 | `switch to local` | Switches the gateway to local/Ollama models |
 | `switch to cloud` | Switches the gateway to cloud passthrough models |
+| `use fast` | Switches to `qwen-small` |
+| `use coding` | Switches to `qwen-coder-fast` |
+| `use <model_id>` | Switches to a specific model ID |
 | `list models` | Lists the gateway model IDs |
 
 Install it in Open WebUI:
@@ -154,7 +173,23 @@ Install it in Open WebUI:
 
 The control server runs separately from the gateway. That is why `start` still works when the gateway is offline.
 
-Recommended user service for Docker-based Open WebUI:
+`./install.sh` writes this env file:
+
+```text
+~/.config/local-ai-gateway/gateway.env
+```
+
+It contains:
+
+| Variable | Purpose |
+|---|---|
+| `GATEWAY_SECRET` | Shared secret for protected control/profile/diagnostics endpoints |
+| `CONTROL_HOST` / `CONTROL_PORT` | Bind address for the always-on control server |
+| `GATEWAY_HOST` / `GATEWAY_PORT` | Bind address for the gateway service |
+| `GATEWAY_URL` | Control server's URL for the gateway |
+| `MODELS_CONFIG` | Active model config loaded on gateway startup |
+
+Recommended user services for Docker-based Open WebUI:
 
 ```ini
 [Unit]
@@ -164,9 +199,28 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/home/shyam/common_games/local-ai-gateway
-ExecStart=/home/shyam/.local/bin/uvicorn control_server:app --host 172.17.0.1 --port 8089
+EnvironmentFile=-/home/shyam/.config/local-ai-gateway/gateway.env
+ExecStart=/home/shyam/.local/bin/uvicorn control_server:app --host ${CONTROL_HOST} --port ${CONTROL_PORT}
 Restart=always
 RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+```ini
+[Unit]
+Description=Local AI Gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shyam/common_games/local-ai-gateway
+EnvironmentFile=-/home/shyam/.config/local-ai-gateway/gateway.env
+ExecStart=/home/shyam/.local/bin/uvicorn src.main:app --host ${GATEWAY_HOST} --port ${GATEWAY_PORT}
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
 
 [Install]
 WantedBy=default.target
@@ -179,6 +233,7 @@ After editing the service:
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now ai-control.service
+systemctl --user enable local-ai-gateway.service
 systemctl --user restart ai-control.service
 ```
 
@@ -186,6 +241,16 @@ Verify from the host:
 
 ```bash
 curl http://172.17.0.1:8089/status
+```
+
+Diagnostics:
+
+```bash
+curl http://172.17.0.1:8089/diagnostics \
+  -H "X-Gateway-Secret: $GATEWAY_SECRET"
+
+curl http://172.17.0.1:8080/api/diagnostics \
+  -H "X-Gateway-Secret: $GATEWAY_SECRET"
 ```
 
 Verify from the Open WebUI container:
@@ -349,6 +414,27 @@ Configured in `src/core/config.py` or via environment variables:
 | Models config path | config/models.yaml | `MODELS_CONFIG` |
 
 ## FAQ and Fixes
+
+### What improvements are included in this ops pass?
+
+| Area | Improvement |
+|---|---|
+| Setup | `install.sh` creates user services, env config, and a shared `GATEWAY_SECRET` |
+| Diagnostics | `doctor.sh`, control `/diagnostics`, and gateway `/api/diagnostics` explain common failures |
+| Service management | The control server prefers `local-ai-gateway.service` over port-killing |
+| Docker reachability | Services default to Docker bridge bind `172.17.0.1` for Open WebUI containers |
+| Security | Control/profile/diagnostics endpoints support `X-Gateway-Secret` |
+| Reliability | Model stop waits briefly for active queued/streaming requests to finish |
+| Profile persistence | Local/cloud switches update `.gateway_profile` and `config/active_models.yaml` |
+| Open WebUI UX | Adds `diagnostics`, `use fast`, `use coding`, and `use <model_id>` commands |
+| Tests | Adds diagnostics and queue idle-wait coverage |
+
+Run this after pulling updates:
+
+```bash
+./install.sh
+./doctor.sh
+```
 
 ### `stop` says Ollama stopped, but `status` says Ollama is running
 

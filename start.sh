@@ -6,13 +6,21 @@ cd "$(dirname "$0")"
 
 # ── Load .env if present ──────────────────────────────────────────────────────
 [ -f .env ] && export $(grep -v '^#' .env | grep '=' | xargs) 2>/dev/null || true
+[ -f "$HOME/.config/local-ai-gateway/gateway.env" ] && export $(grep -v '^#' "$HOME/.config/local-ai-gateway/gateway.env" | grep '=' | xargs) 2>/dev/null || true
+
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 if ! curl -s --max-time 2 http://localhost:11434/api/tags > /dev/null 2>&1; then
   echo "Starting Ollama..."
-  ollama serve > /tmp/ollama.log 2>&1 &
+  if systemctl list-unit-files ollama.service --no-legend 2>/dev/null | grep -q '^ollama.service'; then
+    systemctl --no-ask-password start ollama.service 2>/dev/null || true
+  else
+    ollama serve > /tmp/ollama.log 2>&1 &
+  fi
   sleep 3
-  echo "  ✓ Ollama running"
+  curl -s --max-time 2 http://localhost:11434/api/tags > /dev/null 2>&1 && echo "  ✓ Ollama running" \
+    || echo "  ⚠  Ollama did not start"
 else
   echo "  ✓ Ollama already running"
 fi
@@ -27,30 +35,34 @@ else
 fi
 
 # ── Gateway ───────────────────────────────────────────────────────────────────
-if curl -s --max-time 2 http://localhost:8080/api/status > /dev/null 2>&1; then
+if curl -s --max-time 2 "$GATEWAY_URL/api/status" > /dev/null 2>&1; then
   echo "  ✓ Gateway already running"
 else
   echo "Starting gateway..."
-  fuser -k 8080/tcp 2>/dev/null || true
-  mkdir -p data
+  if systemctl --user list-unit-files local-ai-gateway.service --no-legend 2>/dev/null | grep -q '^local-ai-gateway.service'; then
+    systemctl --user start local-ai-gateway.service
+  else
+    fuser -k 8080/tcp 2>/dev/null || true
+    mkdir -p data
 
-  if ! ~/.local/bin/uvicorn --version > /dev/null 2>&1; then
-    pip install uvicorn --break-system-packages -q
+    if ! ~/.local/bin/uvicorn --version > /dev/null 2>&1; then
+      pip install uvicorn --break-system-packages -q
+    fi
+
+    ~/.local/bin/uvicorn src.main:app --host 0.0.0.0 --port 8080 > /tmp/gateway.log 2>&1 &
+
+    until grep -q "Application startup complete\|address already in use" /tmp/gateway.log 2>/dev/null; do
+      sleep 2
+    done
   fi
-
-  ~/.local/bin/uvicorn src.main:app --host 0.0.0.0 --port 8080 > /tmp/gateway.log 2>&1 &
-
-  until grep -q "Application startup complete\|address already in use" /tmp/gateway.log 2>/dev/null; do
-    sleep 2
-  done
-  echo "  ✓ Gateway running at http://localhost:8080"
+  echo "  ✓ Gateway running"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Everything is running:"
-echo "  Dashboard:  http://localhost:8080"
+echo "  Dashboard:  $GATEWAY_URL"
 echo "  Open WebUI: http://localhost:3000  (login: admin@local.ai / localai2026!)"
-echo "  API:        http://localhost:8080/v1"
+echo "  API:        $GATEWAY_URL/v1"
 echo ""
 echo "When done: bash stop.sh"

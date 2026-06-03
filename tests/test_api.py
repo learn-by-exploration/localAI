@@ -73,6 +73,18 @@ def test_api_status(client):
     assert "queue" in data
 
 
+def test_api_diagnostics(client):
+    resp = client.get("/api/diagnostics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "profile" in data
+    assert "status" in data
+    assert "queue" in data
+    assert "system" in data
+    assert "models" in data
+    assert "recommendations" in data
+
+
 def test_metrics_endpoint(client):
     resp = client.get("/api/metrics")
     assert resp.status_code == 200

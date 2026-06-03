@@ -5,6 +5,7 @@ without restarting the gateway process.
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
 from src.core.lifecycle import ModelLifecycle
@@ -17,12 +18,15 @@ _CONFIGS: dict[str, str] = {
     "cloud": "config/cloud_models.yaml",
 }
 
+_ACTIVE_CONFIG = Path("config/active_models.yaml")
+_STATE_FILE = Path(".gateway_profile")
+
 
 class ProfileManager:
     def __init__(self, registry: ModelRegistry, lifecycle: ModelLifecycle):
         self._registry = registry
         self._lifecycle = lifecycle
-        self._current = "local"
+        self._current = self._read_profile()
 
     @property
     def current(self) -> str:
@@ -52,6 +56,7 @@ class ProfileManager:
         # Hot-reload registry — rollback if load fails
         try:
             self._registry._config_path = Path(config_path)
+            shutil.copyfile(config_path, _ACTIVE_CONFIG)
             self._registry.load()
         except Exception as e:
             logger.error(f"Registry reload failed, rolling back to {prev_profile}: {e}")
@@ -66,6 +71,7 @@ class ProfileManager:
             raise
 
         self._current = profile
+        self._write_profile(profile)
 
         logger.info(f"Registry reloaded: {len(self._registry.get_all_models())} models")
 
@@ -96,3 +102,15 @@ class ProfileManager:
             ],
             "available_profiles": list(_CONFIGS.keys()),
         }
+
+    @staticmethod
+    def _read_profile() -> str:
+        try:
+            profile = _STATE_FILE.read_text().strip()
+        except OSError:
+            return "local"
+        return profile if profile in _CONFIGS else "local"
+
+    @staticmethod
+    def _write_profile(profile: str) -> None:
+        _STATE_FILE.write_text(profile)

@@ -151,6 +151,30 @@ class Pipe:
                 except Exception as e:
                     return f"❌ Error: {e}"
 
+            # ── DIAGNOSTICS ─────────────────────────────────────────────────────
+            elif _intent(msg, ["diagnostics", "doctor", "debug gateway", "troubleshoot"]):
+                try:
+                    resp = await client.get(f"{ctrl}/diagnostics", headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    recs = data.get("recommendations", [])
+                    rec_text = "\n".join(f"- {r}" for r in recs) if recs else "- No obvious issues detected."
+                    return (
+                        "**Gateway diagnostics**\n\n"
+                        f"| Check | Value |\n"
+                        f"|---|---|\n"
+                        f"| Ollama | {'running' if data.get('ollama') else 'stopped'} |\n"
+                        f"| Gateway | {'running' if data.get('gateway') else 'stopped'} |\n"
+                        f"| Gateway service | {'installed' if data.get('gateway_service', {}).get('installed') else 'not installed'} / "
+                        f"{'active' if data.get('gateway_service', {}).get('active') else 'inactive'} |\n"
+                        f"| Ollama service | {'installed' if data.get('ollama_service', {}).get('installed') else 'not installed'} / "
+                        f"{'active' if data.get('ollama_service', {}).get('active') else 'inactive'} |\n"
+                        f"| Secret | {'enabled' if data.get('control', {}).get('secret_enabled') else 'disabled'} |\n\n"
+                        f"**Recommendations**\n{rec_text}"
+                    )
+                except Exception as e:
+                    return f"❌ Could not read diagnostics: {e}"
+
             # ── SWITCH TO LOCAL ────────────────────────────────────────────────
             elif _intent(msg, ["switch to local", "use local", "go local", "local mode"]):
                 return await self._switch(client, gw, ctrl, "local", headers)
@@ -159,6 +183,18 @@ class Pipe:
             elif _intent(msg, ["switch to cloud", "use cloud", "go cloud",
                                 "cloud mode", "restore cloud", "reset to cloud"]):
                 return await self._switch(client, gw, ctrl, "cloud", headers)
+
+            # ── MODEL PRESETS / DIRECT MODEL SWITCH ─────────────────────────────
+            elif msg.startswith("use "):
+                target = msg.removeprefix("use ").strip()
+                if target in {"fast", "tiny"}:
+                    return await self._use_model(client, gw, ctrl, "qwen-small", headers)
+                if target in {"coding", "code"}:
+                    return await self._use_model(client, gw, ctrl, "qwen-coder-fast", headers)
+                if target in {"chat"}:
+                    return await self._use_model(client, gw, ctrl, "qwen-small", headers)
+                if target:
+                    return await self._use_model(client, gw, ctrl, target, headers)
 
             # ── LIST MODELS ────────────────────────────────────────────────────
             elif _intent(msg, ["list models", "show models", "what models",
@@ -225,8 +261,11 @@ class Pipe:
             "| `start` | Start gateway + Ollama |\n"
             "| `stop` | Unload model, stop gateway + Ollama |\n"
             "| `status` | Show what's running + system metrics |\n"
+            "| `diagnostics` | Show service/connectivity checks |\n"
             "| `switch to local` | Use Ollama (your GPU) |\n"
             "| `switch to cloud` | Use OpenAI / Anthropic APIs |\n"
+            "| `use fast` | Switch to the fast local model |\n"
+            "| `use <model_id>` | Switch to a specific model |\n"
             "| `list models` | Show available models |\n\n"
             "**Open WebUI always stays running** — only the gateway and Ollama start/stop.\n\n"
             "When you're done for the day, just type `stop`."
@@ -236,6 +275,29 @@ class Pipe:
         if not self.valves.GATEWAY_SECRET:
             return {}
         return {"X-Gateway-Secret": self.valves.GATEWAY_SECRET}
+
+    async def _ensure_gateway(self, client, gw, ctrl, headers) -> bool:
+        try:
+            resp = await client.get(f"{gw}/api/status", timeout=3)
+            return resp.status_code == 200
+        except Exception:
+            start_resp = await client.post(f"{ctrl}/start", headers=headers)
+            start_resp.raise_for_status()
+            return True
+
+    async def _use_model(self, client, gw, ctrl, model_id: str, headers) -> str:
+        try:
+            await self._ensure_gateway(client, gw, ctrl, headers)
+            resp = await client.post(f"{gw}/api/models/start", json={"model_id": model_id})
+            if resp.status_code == 404:
+                return f"❌ Model `{model_id}` was not found. Type `list models` to see available IDs."
+            if resp.status_code == 503:
+                detail = resp.json().get("detail", "not enough resources")
+                return f"❌ Could not load `{model_id}`: {detail}"
+            resp.raise_for_status()
+            return f"✅ Switched to `{model_id}`."
+        except Exception as e:
+            return f"❌ Could not switch model: {e}"
 
 
 def _intent(msg: str, phrases: list[str]) -> bool:

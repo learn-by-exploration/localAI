@@ -121,3 +121,22 @@ async def test_execute_cancel_while_queued_cleans_counter():
     with pytest.raises(asyncio.CancelledError):
         await first
     assert queue.active_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_wait_until_idle_times_out_when_active():
+    queue = RequestQueue(max_concurrent=1)
+
+    async def slow_task():
+        await asyncio.sleep(999)
+
+    task = asyncio.create_task(queue.execute(slow_task))
+    while queue.active_requests == 0:
+        await asyncio.sleep(0)
+
+    assert await queue.wait_until_idle(timeout_s=0.01) is False
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await queue.wait_until_idle(timeout_s=0.01) is True
