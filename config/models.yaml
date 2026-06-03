@@ -108,7 +108,18 @@ models:
     enabled: false
     tags: [chat, sglang]
 
-default_model: qwen-small
+  - id: gemma4-chat
+    name: Gemma 4 E4B
+    runner: ollama
+    model: gemma4:e4b
+    role: chat
+    priority: quality
+    context_length: 128000
+    vram_required_mb: 14000
+    enabled: true
+    tags: [chat, reasoning]
+
+default_model: gemma4-chat
 
 fallback_chains:
   - name: coding
@@ -120,6 +131,7 @@ fallback_chains:
 
   - name: chat
     models:
+      - gemma4-chat
       - gemma-chat
       - qwen-coder-fast
       - qwen-small
