@@ -4,13 +4,27 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+DRY_RUN=0
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=1
+fi
+
 CONFIG_DIR="$HOME/.config/local-ai-gateway"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 ENV_FILE="$CONFIG_DIR/gateway.env"
+OUT_CONFIG_DIR="$CONFIG_DIR"
+OUT_SYSTEMD_DIR="$SYSTEMD_DIR"
 
-mkdir -p "$CONFIG_DIR" "$SYSTEMD_DIR"
+if [ "$DRY_RUN" = "1" ]; then
+  OUT_CONFIG_DIR="/tmp/local-ai-gateway-dry-run/config"
+  OUT_SYSTEMD_DIR="/tmp/local-ai-gateway-dry-run/systemd"
+  ENV_FILE="$OUT_CONFIG_DIR/gateway.env"
+  rm -rf /tmp/local-ai-gateway-dry-run
+fi
 
-if [ -f "$ENV_FILE" ]; then
+mkdir -p "$OUT_CONFIG_DIR" "$OUT_SYSTEMD_DIR"
+
+if [ "$DRY_RUN" != "1" ] && [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   source "$ENV_FILE"
 fi
@@ -31,8 +45,18 @@ GATEWAY_URL=http://${GATEWAY_HOST:-172.17.0.1}:${GATEWAY_PORT:-8080}
 MODELS_CONFIG=${MODELS_CONFIG:-config/active_models.yaml}
 EOF
 
-sed "s#%h#$HOME#g" services/ai-control.service > "$SYSTEMD_DIR/ai-control.service"
-sed "s#%h#$HOME#g" services/local-ai-gateway.service > "$SYSTEMD_DIR/local-ai-gateway.service"
+sed "s#%h#$HOME#g" services/ai-control.service > "$OUT_SYSTEMD_DIR/ai-control.service"
+sed "s#%h#$HOME#g" services/local-ai-gateway.service > "$OUT_SYSTEMD_DIR/local-ai-gateway.service"
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry run only. Files were written to /tmp/local-ai-gateway-dry-run:"
+  echo "  $ENV_FILE"
+  echo "  $OUT_SYSTEMD_DIR/ai-control.service"
+  echo "  $OUT_SYSTEMD_DIR/local-ai-gateway.service"
+  echo ""
+  cat "$ENV_FILE"
+  exit 0
+fi
 
 systemctl --user daemon-reload
 systemctl --user enable --now ai-control.service

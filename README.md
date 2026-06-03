@@ -34,6 +34,9 @@ pip install -e .
 # Install user services, generate GATEWAY_SECRET, and start the control server
 ./install.sh
 
+# Preview generated env/service files without changing live systemd config
+./install.sh --dry-run
+
 # Check Open WebUI/control/gateway/Ollama wiring
 ./doctor.sh
 
