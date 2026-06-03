@@ -1,77 +1,78 @@
 # Local AI Gateway
 
-A local model orchestration layer with OpenAI and Anthropic-compatible APIs. Run Qwen, Gemma, MiniMax and future models through one endpoint — with smart routing, fallback chains, resource guardrails, and a live dashboard.
+Run local AI models through a single OpenAI and Anthropic-compatible endpoint. Smart routing, fallback chains, VRAM guardrails, live dashboard, and zero-config tool integration.
 
 ```
-Open WebUI / Continue / Cline / curl / any OpenAI client
-              ↓
-    Local AI Gateway  (FastAPI :8080)
-              ↓
-    ┌─ Model Registry      config/models.yaml
-    ├─ Smart Router        coding / chat / agent / long-context
-    ├─ Model Lifecycle     start / stop / auto-unload on idle
-    ├─ Queue Manager       concurrent request limit
-    ├─ Resource Guardrails VRAM / RAM checks
-    └─ Model Profiler      tokens/sec benchmark
-              ↓
-    Adapters: Ollama | llama.cpp | vLLM | SGLang
+opencode / VS Code Continue / Open WebUI / Claude Code / curl / any OpenAI client
+                              ↓
+                 Local AI Gateway  :8080
+                              ↓
+         ┌─ Model Registry      config/models.yaml
+         ├─ Smart Router        coding → qwen3 | chat → gemma4 | fast → qwen-small
+         ├─ Model Lifecycle     start / stop / auto-unload after 10min idle
+         ├─ Queue Manager       max concurrent requests (semaphore)
+         ├─ Resource Guardrails VRAM / RAM checks before loading
+         └─ Model Profiler      tokens/sec benchmark
+                              ↓
+         Adapters: Ollama | llama.cpp | vLLM | SGLang | Cloud (OpenAI/Anthropic)
 ```
 
-## Quick Start
+## Current models (pulled)
 
-**Prerequisites:** Ollama installed and running (`ollama serve`).
+| ID | Ollama name | Role | VRAM | Notes |
+|---|---|---|---|---|
+| `qwen3-8b` | `qwen3:8b` | coding | ~5.5 GB | Default. Thinking mode, best for code. |
+| `gemma4-chat` | `gemma4:e4b` | chat | ~9.6 GB | 128k context, general purpose. |
+| `qwen-small` | `qwen2.5:1.5b` | chat | ~1.5 GB | Instant responses, minimal VRAM. |
+
+Add more in `config/models.yaml` and enable with `ollama pull <name>`.
+
+---
+
+## Quick start
 
 ```bash
-git clone <repo>
+# 1. Install Ollama (if not already installed)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. Pull models
+ollama pull qwen3:8b        # best for coding (~5 GB)
+ollama pull qwen2.5:1.5b    # fast fallback (~1 GB)
+
+# 3. Start everything
 cd local-ai-gateway
-
-# Pull at least one model
-ollama pull qwen2.5:1.5b
-
-# Install package deps
-pip install -e .
-
-# Install user services, generate GATEWAY_SECRET, and start the control server
-./install.sh
-
-# Preview generated env/service files without changing live systemd config
-./install.sh --dry-run
-
-# Check Open WebUI/control/gateway/Ollama wiring
-./doctor.sh
-
-# Start the gateway and Ollama
-curl -X POST http://172.17.0.1:8089/start \
-  -H "X-Gateway-Secret: $(grep '^GATEWAY_SECRET=' ~/.config/local-ai-gateway/gateway.env | cut -d= -f2-)"
-```
-
-Manual run is also supported:
-
-```bash
-uvicorn src.main:app --host 0.0.0.0 --port 8080
-
-# Or use the convenience script
 bash start.sh
 ```
 
-Dashboard: http://localhost:8080  
-API docs: http://localhost:8080/docs
+**URLs after start:**
+- Dashboard: http://localhost:8080
+- API: http://localhost:8080/v1
+- Open WebUI: http://localhost:3000 (Docker, auto-started)
 
-## API Endpoints
+**Stop when done:**
+```bash
+bash stop.sh
+```
 
-### Chat (OpenAI-compatible)
+Or from Open WebUI → **Gateway Control** model → type `stop`.
+
+---
+
+## API reference
+
+### Chat — OpenAI format
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "active",
-    "messages": [{"role": "user", "content": "Hello!"}],
+    "model": "qwen3-8b",
+    "messages": [{"role": "user", "content": "Write a quicksort in Python"}],
     "stream": true
   }'
 ```
 
-### Chat (Anthropic-compatible)
+### Chat — Anthropic format
 
 ```bash
 curl http://localhost:8080/v1/messages \
@@ -84,544 +85,347 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
-### Model Management
+### Model management
 
 ```bash
-# List models
+# List enabled models
 curl http://localhost:8080/api/models
 
-# Start a model
+# Load a model
 curl -X POST http://localhost:8080/api/models/start \
-  -H "Content-Type: application/json" \
-  -d '{"model_id": "qwen-small"}'
+  -H "Content-Type: application/json" -d '{"model_id": "qwen3-8b"}'
 
-# Stop current model
+# Unload current model (free VRAM)
 curl -X POST http://localhost:8080/api/models/stop
 
 # Switch to a different model
 curl -X POST http://localhost:8080/api/models/switch \
-  -H "Content-Type: application/json" \
-  -d '{"model_id": "qwen-coder-fast"}'
+  -H "Content-Type: application/json" -d '{"model_id": "qwen-small"}'
 
-# Run a benchmark
-curl -X POST http://localhost:8080/api/models/qwen-small/profile
+# Benchmark current model (tokens/sec)
+curl -X POST http://localhost:8080/api/models/qwen3-8b/profile
 
-# Live metrics (SSE)
+# Live system metrics (SSE stream)
 curl -N http://localhost:8080/api/metrics/stream
 ```
 
-## Connect Your Tools
-
-### Open WebUI
-
-```
-Admin Panel → Settings → Connections → OpenAI API
-Base URL: http://localhost:8080/v1
-API Key:  local
-```
-
-If Open WebUI runs in Docker, use the host alias instead:
-
-```
-Base URL: http://host.docker.internal:8080/v1
-API Key:  local
-```
-
-Or run via Docker (pre-connected to the gateway):
+### Profile switching (local ↔ cloud)
 
 ```bash
-docker run -d \
-  -p 3000:8080 \
-  -e OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1 \
-  -e OPENAI_API_KEY=local \
-  --add-host=host.docker.internal:host-gateway \
-  -v open-webui:/app/backend/data \
-  --name open-webui \
-  ghcr.io/open-webui/open-webui:main
+# Switch to local Ollama models (default)
+curl -X POST http://localhost:8080/api/profile \
+  -H "Content-Type: application/json" -d '{"profile": "local"}'
+
+# Switch to cloud APIs
+curl -X POST http://localhost:8080/api/profile \
+  -H "Content-Type: application/json" \
+  -d '{"profile": "cloud", "openai_api_key": "sk-...", "anthropic_api_key": "sk-ant-..."}'
+
+# Check current profile
+curl http://localhost:8080/api/profile
 ```
 
-### Open WebUI Gateway Control
+---
 
-The file `openwebui_function.py` is an Open WebUI function that lets you control the gateway from chat. It can:
+## Model aliases
 
-| Chat command | What it does |
-|---|---|
-| `start` | Starts Ollama if needed, starts the gateway, and auto-loads the default model |
-| `stop` | Unloads the current model, stops the gateway, and stops Ollama when permitted |
-| `status` | Shows Ollama, gateway, active model, VRAM, RAM, CPU, and GPU temperature |
-| `diagnostics` | Shows service, Docker, secret, and permission checks |
-| `switch to local` | Switches the gateway to local/Ollama models |
-| `switch to cloud` | Switches the gateway to cloud passthrough models |
-| `use fast` | Switches to `qwen-small` |
-| `use coding` | Switches to `qwen-coder-fast` |
-| `use <model_id>` | Switches to a specific model ID |
-| `list models` | Lists the gateway model IDs |
+Any of these names in `"model"` are accepted and mapped to local models. No client reconfiguration needed.
 
-Install it in Open WebUI:
-
-1. Open `http://localhost:3000`.
-2. Go to `Admin Panel -> Functions`.
-3. Create or import a function.
-4. Paste the contents of `openwebui_function.py`.
-5. Enable the function.
-6. Open the function settings and check these valves:
-
-| Valve | Docker Open WebUI value | Host Open WebUI value |
+| Name | Routes to | Notes |
 |---|---|---|
-| `GATEWAY_URL` | `http://host.docker.internal:8080` | `http://localhost:8080` |
-| `CONTROL_URL` | `http://host.docker.internal:8089` | `http://localhost:8089` |
-| `GATEWAY_SECRET` | Same as `GATEWAY_SECRET` env var, or blank if unset | Same as `GATEWAY_SECRET` env var, or blank if unset |
-| `OPENAI_API_KEY` | Optional, only for cloud mode | Optional, only for cloud mode |
-| `ANTHROPIC_API_KEY` | Optional, only for cloud mode | Optional, only for cloud mode |
+| `qwen3-8b` | qwen3:8b | Direct ID |
+| `qwen-small` | qwen2.5:1.5b | Direct ID |
+| `gemma4-chat` | gemma4:e4b | Direct ID |
+| `active` | qwen3-8b | Default best model |
+| `claude-sonnet` | qwen3-8b | |
+| `claude-sonnet-4-6` | qwen3-8b | Versioned (used by Claude Code CLI) |
+| `claude-opus` | qwen3-8b | |
+| `claude-haiku` | qwen-small | |
+| `claude-haiku-4-5` | qwen-small | Versioned |
+| `gpt-4` | qwen3-8b | |
+| `gpt-4o` | qwen3-8b | |
+| `gpt-3.5-turbo` | qwen-small | |
+| `auto` | smart-routed | Task-type detection |
 
-The control server runs separately from the gateway. That is why `start` still works when the gateway is offline.
+Update aliases in `config/models.yaml` when you pull new models.
 
-`./install.sh` writes this env file:
+---
 
-```text
-~/.config/local-ai-gateway/gateway.env
-```
+## Coding tools integration
 
-It contains:
-
-| Variable | Purpose |
-|---|---|
-| `GATEWAY_SECRET` | Shared secret for protected control/profile/diagnostics endpoints |
-| `CONTROL_HOST` / `CONTROL_PORT` | Bind address for the always-on control server |
-| `GATEWAY_HOST` / `GATEWAY_PORT` | Bind address for the gateway service |
-| `GATEWAY_URL` | Control server's URL for the gateway |
-| `MODELS_CONFIG` | Active model config loaded on gateway startup |
-
-Recommended user services for Docker-based Open WebUI:
-
-```ini
-[Unit]
-Description=AI Gateway Control Server
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/home/shyam/common_games/local-ai-gateway
-EnvironmentFile=-/home/shyam/.config/local-ai-gateway/gateway.env
-ExecStart=/home/shyam/.local/bin/uvicorn control_server:app --host ${CONTROL_HOST} --port ${CONTROL_PORT}
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-```
-
-```ini
-[Unit]
-Description=Local AI Gateway
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/home/shyam/common_games/local-ai-gateway
-EnvironmentFile=-/home/shyam/.config/local-ai-gateway/gateway.env
-ExecStart=/home/shyam/.local/bin/uvicorn src.main:app --host ${GATEWAY_HOST} --port ${GATEWAY_PORT}
-Restart=on-failure
-RestartSec=3
-TimeoutStopSec=30
-
-[Install]
-WantedBy=default.target
-```
-
-Use `172.17.0.1` for Docker bridge access. This lets Open WebUI reach the control server through `host.docker.internal` without exposing the control server on every network interface.
-
-After editing the service:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now ai-control.service
-systemctl --user enable local-ai-gateway.service
-systemctl --user restart ai-control.service
-```
-
-Verify from the host:
-
-```bash
-curl http://172.17.0.1:8089/status
-```
-
-Diagnostics:
-
-```bash
-curl http://172.17.0.1:8089/diagnostics \
-  -H "X-Gateway-Secret: $GATEWAY_SECRET"
-
-curl http://172.17.0.1:8080/api/diagnostics \
-  -H "X-Gateway-Secret: $GATEWAY_SECRET"
-```
-
-Verify from the Open WebUI container:
-
-```bash
-docker exec open-webui python3 - <<'PY'
-import urllib.request
-print(urllib.request.urlopen("http://host.docker.internal:8089/status", timeout=3).read().decode())
-PY
-```
-
-Expected response:
-
-```json
-{"ollama": false, "gateway": false}
-```
-
-If `GATEWAY_SECRET` is set, include it in requests:
-
-```bash
-curl http://172.17.0.1:8089/status \
-  -H "X-Gateway-Secret: $GATEWAY_SECRET"
-```
-
-### Stopping System Ollama Without Prompts
-
-If Ollama is installed as a system service, it usually runs as user `ollama` under `ollama.service`. A user-level control server cannot kill that process directly. It must ask systemd to stop `ollama.service`.
-
-The control server uses:
-
-```bash
-systemctl --no-ask-password stop ollama.service
-```
-
-This prevents password popups. If your user is already allowed to manage the service, Open WebUI can fully stop Ollama. If not, `stop` will still unload the model and stop the gateway, but it will report that Ollama needs admin permission.
-
-To allow only user `shyam` to start/stop/restart only `ollama.service`, add this polkit rule once:
-
-```bash
-sudo tee /etc/polkit-1/rules.d/49-ollama-control.rules >/dev/null <<'EOF'
-polkit.addRule(function(action, subject) {
-  if (
-    subject.user == "shyam" &&
-    action.id == "org.freedesktop.systemd1.manage-units" &&
-    action.lookup("unit") == "ollama.service" &&
-    ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0
-  ) {
-    return polkit.Result.YES;
-  }
-});
-EOF
-
-sudo systemctl restart polkit
-```
-
-Test:
-
-```bash
-systemctl --no-ask-password start ollama.service
-systemctl is-active ollama.service
-systemctl --no-ask-password stop ollama.service
-systemctl is-active ollama.service
-```
-
-If the last command prints `inactive` and no password prompt appears, Open WebUI `stop` can fully stop Ollama.
-
-### Continue (VS Code / JetBrains)
-
-```json
-{
-  "models": [{
-    "title": "Local AI Gateway",
-    "provider": "openai",
-    "model": "qwen-coder-fast",
-    "apiBase": "http://localhost:8080/v1",
-    "apiKey": "local"
-  }]
-}
-```
-
-### Python (openai SDK)
+### openai SDK (Python)
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="local")
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="local"          # required field, value ignored
+)
 
+# Non-streaming
 response = client.chat.completions.create(
-    model="active",
-    messages=[{"role": "user", "content": "Hello!"}],
+    model="qwen3-8b",
+    messages=[{"role": "user", "content": "Write a binary search function"}],
+)
+print(response.choices[0].message.content)
+
+# Streaming
+stream = client.chat.completions.create(
+    model="qwen3-8b",
+    messages=[{"role": "user", "content": "Explain recursion"}],
     stream=True,
 )
-for chunk in response:
+for chunk in stream:
     print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
-## Model Registry (config/models.yaml)
+**Note on Qwen3:** It uses ~1300 thinking tokens before answering. For reliable results set `max_tokens >= 2048`, or omit it to let Ollama decide. For instant responses use `model="qwen-small"`.
 
-Enable/disable models and set their roles:
+### anthropic SDK (Python)
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8080",
+    api_key="local"
+)
+
+message = client.messages.create(
+    model="claude-sonnet",   # → qwen3-8b via alias
+    max_tokens=500,
+    messages=[{"role": "user", "content": "Review this code: ..."}]
+)
+print(message.content[0].text)
+```
+
+### opencode (terminal AI coding assistant)
+
+The global config at `~/.config/opencode/config.json` adds a `local` provider:
+
+```bash
+# List local models
+opencode models local
+
+# Use in any project
+opencode --model local/qwen3-8b
+opencode --model local/qwen-small    # faster
+```
+
+Or launch the TUI from your project folder:
+```bash
+opencode              # press 'm' to pick local/qwen3-8b
+```
+
+### VS Code — Continue extension
+
+Config at `~/.continue/config.json` — already set up with all three models.
+
+- `Ctrl+L` — open Continue sidebar for chat
+- `Ctrl+I` — inline edit (highlight code first)
+- Bottom of sidebar: pick **Qwen3 8B** or **Qwen 2.5 1.5B**
+
+### Claude Code CLI (`--print` mode)
+
+Claude Code's `--print` (chat/explain) mode works with the local gateway. Agentic mode (file editing, bash) requires real Claude models.
+
+```bash
+# One-off — set per command
+ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=local \
+  claude --print "explain this function" --output-format text
+
+# Permanent alias in ~/.bashrc
+alias claude-local='ANTHROPIC_BASE_URL=http://localhost:8080 ANTHROPIC_API_KEY=local claude --print --output-format text'
+
+# Then use anywhere
+claude-local "what does this code do?"
+claude-local "review main.py for bugs"
+```
+
+### Open WebUI
+
+Running at http://localhost:3000 — login: `admin@local.ai` / `localai2026!`
+
+The **Gateway Control** model (pipe function) is pre-installed. Select it in the dropdown and type:
+
+| Command | Action |
+|---|---|
+| `start` | Start Ollama + gateway, auto-load default model |
+| `stop` | Unload model, stop gateway + Ollama (WebUI stays running) |
+| `status` | Current profile, active model, VRAM/RAM/CPU/GPU temp |
+| `switch to local` | Switch to Ollama models |
+| `switch to cloud` | Switch to OpenAI/Anthropic APIs |
+| `list models` | Show available models |
+
+---
+
+## Smart router
+
+When `"model": "auto"` (or any unrecognised name that's not an alias), the router detects task type from message content:
+
+| Detected | Trigger | Routes to |
+|---|---|---|
+| `coding` | code/function/class/debug/SQL/Python keywords | `coding` role model → qwen3-8b |
+| `agent` | tools present, or tool/execute/bash keywords | `agent` role model |
+| `long_context` | message > ~2000 tokens | `long_context` role model → gemma4-chat |
+| `chat` | default | `chat` role model → gemma4-chat |
+
+Explicit model ID (e.g. `"model": "qwen-small"`) always bypasses routing.
+
+---
+
+## Model registry (`config/models.yaml`)
 
 ```yaml
 models:
-  - id: qwen-coder-fast
-    name: Qwen2.5 Coder 7B
+  - id: qwen3-8b
+    name: Qwen3 8B (Coding + Thinking)
     runner: ollama          # ollama | llamacpp | vllm | sglang
-    model: qwen2.5-coder:7b
+    model: qwen3:8b
     role: coding            # coding | chat | agent | long_context
-    priority: fast          # fast | balanced | quality
+    priority: quality       # fast | balanced | quality
     context_length: 32768
-    vram_required_mb: 5000
+    vram_required_mb: 5500
     enabled: true
+    extra:
+      min_tokens: 2048      # Qwen3 needs budget for thinking phase
 
-default_model: qwen-coder-fast
+default_model: qwen3-8b
 
-# Cloud model name aliases — clients using these names work transparently
 aliases:
   - alias: claude-sonnet
-    model_id: qwen-coder-fast
-  - alias: gpt-4
-    model_id: qwen-coder-fast
+    model_id: qwen3-8b
 
-# Fallback chains — tried in order if primary model fails
 fallback_chains:
   - name: coding
-    models: [qwen-coder-fast, qwen-small]
+    models: [qwen3-8b, gemma4-chat, qwen-small]
 ```
 
-## Smart Router
+### Adding a new model
 
-The router detects task type from the message content and routes accordingly:
+```bash
+# 1. Pull it
+ollama pull llama3.2:3b
 
-| Detected type | Trigger | Model role used |
-|---|---|---|
-| `coding` | Code/function/class/debug keywords | `coding` role |
-| `agent` | Tool definitions present, or tool/execute keywords | `agent` role |
-| `long_context` | Message > ~2000 tokens | `long_context` role |
-| `chat` | Default | `chat` role |
+# 2. Add to config/models.yaml
+- id: llama3-fast
+  name: Llama 3.2 3B
+  runner: ollama
+  model: llama3.2:3b
+  role: chat
+  priority: fast
+  context_length: 128000
+  vram_required_mb: 2000
+  enabled: true
 
-Override by passing an exact model ID as `"model"` in the request.
+# 3. Restart gateway (or hot-switch via API)
+bash stop.sh && bash start.sh
+```
 
-## Supported Runtimes
+---
+
+## Supported runtimes
 
 | Runtime | Install | Best for |
 |---|---|---|
-| **Ollama** | `curl -fsSL https://ollama.com/install.sh \| sh` | GGUF models, easy setup — recommended start |
+| **Ollama** | `curl -fsSL https://ollama.com/install.sh \| sh` | GGUF models, easy setup — start here |
 | **llama.cpp** | Build from source | Fine-grained GGUF control, CPU/GPU |
 | **vLLM** | `pip install vllm` | Full-precision HuggingFace models, high throughput |
 | **SGLang** | `pip install "sglang[all]"` | Structured generation, high throughput |
 
-## Resource Guardrails
+---
 
-Configured in `src/core/config.py` or via environment variables:
+## Resource guardrails
 
 | Setting | Default | Env var |
 |---|---|---|
 | Max VRAM | 12,000 MB | `MAX_VRAM_MB` |
 | Max RAM | 28,000 MB | `MAX_RAM_MB` |
 | Max concurrent requests | 2 | — |
-| Auto-unload idle timeout | 600s (10min) | `AUTO_UNLOAD_SECONDS` |
+| Auto-unload idle | 600s (10 min) | `AUTO_UNLOAD_SECONDS` |
 | Gateway port | 8080 | `PORT` |
-| Models config path | config/models.yaml | `MODELS_CONFIG` |
+| Models config | config/models.yaml | `MODELS_CONFIG` |
 
-## FAQ and Fixes
+---
 
-### What improvements are included in this ops pass?
+## Security
 
-| Area | Improvement |
-|---|---|
-| Setup | `install.sh` creates user services, env config, and a shared `GATEWAY_SECRET` |
-| Diagnostics | `doctor.sh`, control `/diagnostics`, and gateway `/api/diagnostics` explain common failures |
-| Service management | The control server prefers `local-ai-gateway.service` over port-killing |
-| Docker reachability | Services default to Docker bridge bind `172.17.0.1` for Open WebUI containers |
-| Security | Control/profile/diagnostics endpoints support `X-Gateway-Secret` |
-| Reliability | Model stop waits briefly for active queued/streaming requests to finish |
-| Profile persistence | Local/cloud switches update `.gateway_profile` and `config/active_models.yaml` |
-| Open WebUI UX | Adds `diagnostics`, `use fast`, `use coding`, and `use <model_id>` commands |
-| Tests | Adds diagnostics and queue idle-wait coverage |
-
-Run this after pulling updates:
+The control server (port 8089) and `/api/profile` endpoint support an optional shared secret:
 
 ```bash
-./install.sh
-./doctor.sh
+# Set in .env
+GATEWAY_SECRET=my-secret
+
+# Pass in requests
+curl http://localhost:8089/status -H "X-Gateway-Secret: my-secret"
 ```
 
-### `stop` says Ollama stopped, but `status` says Ollama is running
+Without `GATEWAY_SECRET`, both services are localhost-only (bound to `127.0.0.1`) and require no auth — safe for personal use.
 
-This means the stop command did not verify Ollama after trying to stop it. The current control server reports based on the final health check at `http://localhost:11434/api/tags`.
+---
 
-Check manually:
+## Tests
 
 ```bash
-curl http://localhost:11434/api/tags
-systemctl is-active ollama.service
-ps -eo pid,user,comm,args | rg 'ollama|PID'
-```
-
-If Ollama is managed by `ollama.service`, make sure the polkit rule in `Stopping System Ollama Without Prompts` is installed.
-
-### Open WebUI says it cannot reach the control server
-
-First check the host:
-
-```bash
-systemctl --user status ai-control.service --no-pager
-ss -ltnp | rg 8089
-curl http://172.17.0.1:8089/status
-```
-
-Then check from the container:
-
-```bash
-docker exec open-webui python3 - <<'PY'
-import urllib.request
-print(urllib.request.urlopen("http://host.docker.internal:8089/status", timeout=3).read().decode())
-PY
-```
-
-If the host works but the container fails, confirm the Open WebUI container has the host alias:
-
-```bash
-docker inspect open-webui --format '{{json .HostConfig.ExtraHosts}}'
-```
-
-It should include:
-
-```text
-host.docker.internal:host-gateway
-```
-
-If it does not, recreate Open WebUI with:
-
-```bash
---add-host=host.docker.internal:host-gateway
-```
-
-### Why not bind the control server to `0.0.0.0`?
-
-The control server can start and stop local services, so it should not be exposed to the whole LAN. For Docker-based Open WebUI, bind it to the Docker host bridge:
-
-```text
-172.17.0.1:8089
-```
-
-For host-only use, bind it to:
-
-```text
-127.0.0.1:8089
-```
-
-Only use `0.0.0.0` if you have a real network access-control plan and `GATEWAY_SECRET` enabled.
-
-### Open WebUI `stop` asks for a password
-
-The control server should use:
-
-```bash
-systemctl --no-ask-password stop ollama.service
-```
-
-If a password prompt still appears, restart the user service so it is running the latest code:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user restart ai-control.service
-```
-
-If Ollama still cannot be stopped, install the polkit rule in `Stopping System Ollama Without Prompts`.
-
-### Open WebUI `start` says `ollama start timed out`
-
-Check whether systemd can start Ollama without a prompt:
-
-```bash
-systemctl --no-ask-password start ollama.service
-systemctl is-active ollama.service
-journalctl -u ollama.service --since '5 minutes ago' --no-pager
-```
-
-If `systemctl` cannot start it without permission, install the polkit rule. If it starts but `/api/tags` is not reachable, check the Ollama listen address and logs.
-
-### Open WebUI `status` shows gateway offline after `stop`
-
-That is expected. The control server stays online on port `8089`; the gateway API on port `8080` is intentionally stopped. Type `start` in Open WebUI to bring the gateway and Ollama back.
-
-### Gateway starts, but no model loads
-
-Check the default model in `config/models.yaml` and whether Ollama has it pulled:
-
-```bash
-rg 'default_model|id:|model:' config/models.yaml
-ollama list
-ollama pull qwen2.5:1.5b
-```
-
-Then restart:
-
-```bash
-curl -X POST http://172.17.0.1:8089/start
-```
-
-### Profile switch to cloud fails
-
-Cloud mode needs API keys. In Open WebUI function settings, set:
-
-```text
-OPENAI_API_KEY
-ANTHROPIC_API_KEY
-```
-
-Then use:
-
-```text
-switch to cloud
-```
-
-Request-body keys are used for adapter creation and are not written permanently to `os.environ`.
-
-## Running Tests
-
-```bash
-# Unit tests
+# Unit tests (38 tests, ~3s)
 python3 -m pytest tests/ -v
 
-# Integration tests (requires gateway + Ollama running)
+# Integration tests (38 tests, requires gateway + Ollama running)
 bash tests/integration/run_tests.sh
 ```
 
-See [TEST_REPORT.md](TEST_REPORT.md) for the full test results.
+See [TEST_REPORT.md](TEST_REPORT.md) for full results.
 
-## Project Structure
+---
+
+## Project structure
 
 ```
 local-ai-gateway/
 ├── config/
-│   └── models.yaml          # Model definitions, aliases, fallback chains
+│   ├── models.yaml              # Local model definitions, aliases, fallback chains
+│   └── cloud_models.yaml        # Cloud API model definitions (OpenAI, Anthropic)
 ├── src/
-│   ├── main.py              # FastAPI app entry point
+│   ├── main.py                  # FastAPI app, startup/shutdown
 │   ├── api/
-│   │   ├── openai_compat.py  # POST /v1/chat/completions, GET /v1/models
-│   │   ├── anthropic_compat.py # POST /v1/messages
-│   │   ├── models_api.py    # /api/models start/stop/switch
-│   │   └── metrics_api.py   # /api/metrics, /api/metrics/stream (SSE)
+│   │   ├── openai_compat.py     # POST /v1/chat/completions, GET /v1/models
+│   │   ├── anthropic_compat.py  # POST /v1/messages
+│   │   ├── models_api.py        # /api/models start/stop/switch/profile
+│   │   ├── metrics_api.py       # /api/metrics, /api/metrics/stream (SSE)
+│   │   └── profile_api.py       # /api/profile (hot-reload local/cloud switch)
 │   ├── core/
-│   │   ├── registry.py      # Loads and resolves models.yaml
-│   │   ├── router.py        # Task detection + model selection
-│   │   ├── lifecycle.py     # Model start/stop/auto-unload
-│   │   ├── queue_manager.py # Concurrent request semaphore
-│   │   ├── guardrails.py    # VRAM/RAM checks
-│   │   └── profiler.py      # tokens/sec benchmark
+│   │   ├── registry.py          # Loads and resolves models.yaml
+│   │   ├── router.py            # Task-type detection + model selection
+│   │   ├── lifecycle.py         # Model start/stop/auto-unload (asyncio.Lock)
+│   │   ├── queue_manager.py     # Semaphore for concurrent requests + streaming
+│   │   ├── guardrails.py        # VRAM/RAM checks via nvidia-smi / psutil
+│   │   ├── profiler.py          # tokens/sec benchmark, persistent cache
+│   │   └── profile_manager.py   # Hot-reload local↔cloud profile switching
 │   ├── adapters/
-│   │   ├── ollama.py        # Ollama HTTP adapter
-│   │   ├── llamacpp.py      # llama-server subprocess adapter
-│   │   ├── vllm.py          # vLLM subprocess adapter
-│   │   └── sglang.py        # SGLang subprocess adapter
+│   │   ├── ollama.py            # Ollama HTTP adapter (primary)
+│   │   ├── llamacpp.py          # llama-server subprocess adapter
+│   │   ├── vllm.py              # vLLM subprocess adapter
+│   │   ├── sglang.py            # SGLang subprocess adapter
+│   │   ├── cloud_openai.py      # OpenAI API passthrough
+│   │   └── cloud_anthropic.py   # Anthropic API passthrough
 │   ├── schemas/
-│   │   ├── unified.py       # Internal request/response types
-│   │   ├── openai_schema.py # OpenAI API types
-│   │   └── anthropic_schema.py # Anthropic API types
-│   └── dashboard/static/    # HTML/CSS/JS dashboard
+│   │   ├── unified.py           # Internal request/response types
+│   │   ├── openai_schema.py     # OpenAI API schema
+│   │   └── anthropic_schema.py  # Anthropic API schema (accepts list system blocks)
+│   └── dashboard/static/        # HTML/CSS/JS live dashboard
+├── control_server.py            # Always-on control server :8089
+├── openwebui_function.py        # Open WebUI pipe function (Gateway Control)
 ├── tests/
 │   ├── test_registry.py
 │   ├── test_router.py
 │   ├── test_queue_manager.py
 │   ├── test_api.py
 │   └── integration/
-│       └── run_tests.sh     # End-to-end test suite
+│       └── run_tests.sh
+├── start.sh                     # Start Ollama + Open WebUI + gateway
+├── stop.sh                      # Stop everything, free VRAM
+├── switch.sh                    # CLI profile switcher (local/cloud)
 ├── TEST_REPORT.md
-├── start.sh
 └── pyproject.toml
 ```
